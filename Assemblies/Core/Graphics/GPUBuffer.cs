@@ -62,7 +62,14 @@ namespace Core.Graphics
       heapProp.CreationNodeMask = 1;
       heapProp.VisibleNodeMask = 1;
 
+      _Resource = GraphicsCore.Device.CreateCommittedResource(heapProp, HeapFlags.None, resourceDesc, _UsageState, null);
+      Debug.Assert(_Resource != null);
+      _GPUVirtualAddress = _Resource.GPUVirtualAddress;
 
+      if(initialData != null)
+      {
+
+      }
     }
   }
 }

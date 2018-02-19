@@ -17,13 +17,16 @@
 
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|AnyCPU'">
     <OutputPath>$(SolutionDir)\build\$(Platform)\$(Configuration)\$(MSBuildProjectName)</OutputPath>
+    <LangVersion>latest</LangVersion>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'">
     <OutputPath>$(SolutionDir)\build\$(Platform)\$(Configuration)\$(MSBuildProjectName)</OutputPath>
+    <LangVersion>latest</LangVersion>
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="codecracker.CSharp" Version="1.0.3" />
     <PackageReference Include="SharpDX.Direct3D12" Version="4.0.1" />
     <PackageReference Include="SharpDX.Mathematics" Version="4.0.1" />
   </ItemGroup>
