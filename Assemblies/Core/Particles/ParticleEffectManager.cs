@@ -1,11 +1,9 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Text;
-
-namespace Core.Particles
+﻿namespace Core.Particles
 {
+  /// <summary>
+  /// Defines the <see cref="ParticleEffectManager" />
+  /// </summary>
   public static class ParticleEffectManager
   {
-
   }
 }
