@@ -5,9 +5,9 @@
   using System;
 
   /// <summary>
-  /// Defines the <see cref="GraphicsCore" />
+  /// Defines the <see cref="Globals" />
   /// </summary>
-  public static class GraphicsCore
+  public static class Globals
   {
 #if DEBUG
     static Guid WKPDID_D3DDebugObjectName = new Guid(0x429b8c22, 0x9188, 0x4b0c, 0x87, 0x42, 0xac, 0xb0, 0xbf, 0x85, 0xc2, 0x00);
@@ -123,7 +123,7 @@
     /// <summary>
     /// Defines the _GenerateMipsRS
     /// </summary>
-    public static Core.RootSignature _GenerateMipsRS;
+    public static CRootSignature _GenerateMipsRS;
 
     /// <summary>
     /// Defines the _GenerateMipsLinearPSO

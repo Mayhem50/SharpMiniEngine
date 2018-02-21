@@ -316,7 +316,7 @@
 
           if (firstCompile)
           {
-            _RootSignature = rootSig = GraphicsCore.Device.CreateRootSignature(rootDesc.Serialize());
+            _RootSignature = rootSig = Globals.Device.CreateRootSignature(rootDesc.Serialize());
             _RootSignature.Name = name;
             _RootSignatureHashMap[hashCode] = _RootSignature;
           }

@@ -179,15 +179,13 @@
       public int StagedSize {
         get {
           var needSpace = 0;
-          uint rootIndex = 0;
           var staleParams = StaleRootParamsBitMap;
 
-          while ((rootIndex = (uint)BitScanner.BitScanForward(staleParams)) != 0)
+          while (BitScanner.BitScanForward(staleParams, out var rootIndex))
           {
             staleParams ^= (uint)(1 << (int)rootIndex);
-
-            var maxSetHandle = BitScanner.BitScanReverse(RootDescriptorTable[rootIndex].AssignedHandleBitMap);
-            Debug.Assert(maxSetHandle != 0, "Root entry marked as stale but has no stale descriptors");
+            
+            Debug.Assert(BitScanner.BitScanReverse(RootDescriptorTable[rootIndex].AssignedHandleBitMap, out var maxSetHandle), "Root entry marked as stale but has no stale descriptors");
 
             needSpace += maxSetHandle + 1;
           }
@@ -206,23 +204,22 @@
       public void CopyAndBindStaleTables(DescriptorHeapType type, uint descriptorSize, DescriptorHandle destHandleStart, CommandListSetFunc setFunction)
       {
         uint staleParamCount = 0;
-        var tableSize = new uint[MaxNumDescriptorTables];
-        var rootIndices = new uint[MaxNumDescriptorTables];
+        var tableSize = new int[MaxNumDescriptorTables];
+        var rootIndices = new int[MaxNumDescriptorTables];
         var needSpace = 0;
-        uint rootIndex;
+        int rootIndex;
 
         var staleParams = StaleRootParamsBitMap;
 
-        while ((rootIndex = (uint)BitScanner.BitScanForward(staleParams)) != 0)
+        while (BitScanner.BitScanForward(staleParams, out rootIndex))
         {
           rootIndices[staleParamCount] = rootIndex;
           staleParams ^= (uint)(1 << (int)rootIndex);
-
-          var maxSetHandle = BitScanner.BitScanReverse(RootDescriptorTable[rootIndex].AssignedHandleBitMap);
-          Debug.Assert(maxSetHandle != 0, "Root entry marked as stale but has no stale descriptors");
+          
+          Debug.Assert(BitScanner.BitScanReverse(RootDescriptorTable[rootIndex].AssignedHandleBitMap, out var maxSetHandle), "Root entry marked as stale but has no stale descriptors");
 
           needSpace += maxSetHandle + 1;
-          tableSize[staleParamCount] = (uint)maxSetHandle + 1;
+          tableSize[staleParamCount] = maxSetHandle + 1;
 
           staleParamCount++;
         }
@@ -251,21 +248,20 @@
           UInt64 setHandles = rootDescTable.AssignedHandleBitMap;
           var curDest = destHandleStart.CPUHandle;
           destHandleStart += (int)(tableSize[idx] * descriptorSize);
+          
 
-          int skipCount;
-
-          while ((skipCount = BitScanner.BitScanForward64(setHandles)) != 0)
+          while (BitScanner.BitScanForward64(setHandles, out var skipCount))
           {
             setHandles >>= skipCount;
             srcHandles += skipCount;
             curDest.Ptr += skipCount * descriptorSize;
 
-            var descriptorCount = BitScanner.BitScanForward64(~setHandles);
+            BitScanner.BitScanForward64(~setHandles, out var descriptorCount);
             setHandles >>= descriptorCount;
 
             if (numSrcDescriptorRanges + descriptorCount > maxdescriptorPerCopy)
             {
-              GraphicsCore.Device.CopyDescriptors(numDestDescriptorRanges, destDescriptorRangeStarts, destDescriptorRangeSizes, numSrcDescriptorRanges, srcDescriptorRangeStarts, srcDescriptorRangeSizes, type);
+              Globals.Device.CopyDescriptors(numDestDescriptorRanges, destDescriptorRangeStarts, destDescriptorRangeSizes, numSrcDescriptorRanges, srcDescriptorRangeStarts, srcDescriptorRangeSizes, type);
 
               numSrcDescriptorRanges = 0;
               numDestDescriptorRanges = 0;
@@ -287,7 +283,7 @@
           }
         }
 
-        GraphicsCore.Device.CopyDescriptors(numDestDescriptorRanges, destDescriptorRangeStarts, destDescriptorRangeSizes, numSrcDescriptorRanges, srcDescriptorRangeStarts, srcDescriptorRangeSizes, type);
+        Globals.Device.CopyDescriptors(numDestDescriptorRanges, destDescriptorRangeStarts, destDescriptorRangeSizes, numSrcDescriptorRanges, srcDescriptorRangeStarts, srcDescriptorRangeSizes, type);
       }
 
       /// <summary>
@@ -297,9 +293,8 @@
       {
         StaleRootParamsBitMap = 0;
         var tableParams = (uint)RootDescriptorTablesBitMap;
-        var rootIndex = 0;
 
-        while ((rootIndex = BitScanner.BitScanForward(tableParams)) != 0)
+        while (BitScanner.BitScanForward(tableParams, out var rootIndex))
         {
           tableParams ^= (uint)(1 << rootIndex);
           if (RootDescriptorTable[rootIndex].AssignedHandleBitMap != 0)
@@ -346,14 +341,13 @@
         StaleRootParamsBitMap = 0;
         RootDescriptorTablesBitMap = (type == DescriptorHeapType.Sampler ? rootSig.SamplerTableBitMap.ToUInt() : rootSig.DescriptorTableBitMap.ToUInt());
 
-        uint tableParams = RootDescriptorTablesBitMap;
-        int rootIndex;
+        var tableParams = RootDescriptorTablesBitMap;
 
-        while ((rootIndex = BitScanner.BitScanForward(tableParams)) != 0)
+        while (BitScanner.BitScanForward(tableParams, out var rootIndex))
         {
           tableParams ^= (uint)(1 << rootIndex);
 
-          uint tableSize = rootSig.DescriptorTableSize[rootIndex];
+          var tableSize = rootSig.DescriptorTableSize[rootIndex];
           Debug.Assert(tableSize > 0);
 
           ref var rootDescriptorTable = ref RootDescriptorTable[rootIndex];
@@ -380,7 +374,7 @@
       _OwningContext = owningContext;
       _DescriptorType = type;
       _CurrentHeap = null;
-      _DescriptorSize = (uint)GraphicsCore.Device.GetDescriptorHandleIncrementSize(type);
+      _DescriptorSize = (uint)Globals.Device.GetDescriptorHandleIncrementSize(type);
       for (int idx = 0; idx < 2; idx++)
       {
         _DescriptorHeapPool[idx] = new List<DescriptorHeap>();

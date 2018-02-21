@@ -7,7 +7,7 @@
   /// <summary>
   /// Defines the <see cref="GPUBuffer" />
   /// </summary>
-  public abstract class GPUBuffer : GPUResource
+  public abstract class GPUBuffer : GPUResource, IDisposable
   {
     /// <summary>
     /// Gets the DescribeBuffer
@@ -59,17 +59,17 @@
     /// <summary>
     /// Defines the _BufferSize
     /// </summary>
-    protected long _BufferSize = 0;
+    protected int _BufferSize = 0;
 
     /// <summary>
     /// Defines the _ElementCount
     /// </summary>
-    protected UInt32 _ElementCount = 0;
+    protected int _ElementCount = 0;
 
     /// <summary>
     /// Defines the _ElementSize
     /// </summary>
-    protected UInt32 _ElementSize = 0;
+    protected int _ElementSize = 0;
 
     /// <summary>
     /// Defines the _ResourceFlags
@@ -79,14 +79,14 @@
     /// <summary>
     /// The CreateDerivedViews
     /// </summary>
-    protected abstract void CreateDerivedViews();
+    public abstract void CreateDerivedViews();
 
     /// <summary>
     /// Initializes a new instance of the <see cref="GPUBuffer"/> class.
     /// </summary>
     /// <param name="resource">The <see cref="Resource"/></param>
     /// <param name="currentState">The <see cref="ResourceStates"/></param>
-    public GPUBuffer(Resource resource, ResourceStates currentState) : base(resource, currentState)
+    protected GPUBuffer(Resource resource, ResourceStates currentState) : base(resource, currentState)
     {
     }
 
@@ -98,7 +98,7 @@
     /// <param name="numElements">The <see cref="uint"/></param>
     /// <param name="elementSize">The <see cref="uint"/></param>
     /// <param name="initialData">The <see cref="T[]"/></param>
-    internal void Create<T>(string name, uint numElements, uint elementSize, T[] initialData) where T : struct
+    internal void Create(string name, int numElements, int elementSize, byte[] initialData = null)
     {
       base.Destroy();
 
@@ -109,20 +109,26 @@
       var resourceDesc = DescribeBuffer;
       _UsageState = ResourceStates.Common;
 
-      HeapProperties heapProp = new HeapProperties();
-      heapProp.Type = HeapType.Default;
-      heapProp.CPUPageProperty = CpuPageProperty.Unknown;
-      heapProp.CreationNodeMask = 1;
-      heapProp.VisibleNodeMask = 1;
+      var heapProp = new HeapProperties
+      {
+        Type = HeapType.Default,
+        CPUPageProperty = CpuPageProperty.Unknown,
+        CreationNodeMask = 1,
+        VisibleNodeMask = 1
+      };
 
-      _Resource = GraphicsCore.Device.CreateCommittedResource(heapProp, HeapFlags.None, resourceDesc, _UsageState, null);
+      _Resource = Globals.Device.CreateCommittedResource(heapProp, HeapFlags.None, resourceDesc, _UsageState, null);
+      _Resource.Name = name;
       Debug.Assert(_Resource != null);
       _GPUVirtualAddress = _Resource.GPUVirtualAddress;
 
-      if (initialData != null)
-      {
+      if (initialData != null) { CommandContext.InitializeBuffer(this, initialData, _BufferSize); }
+    }
 
-      }
+    public void Dispose()
+    {
+      Destroy();
+      GC.SuppressFinalize(this);
     }
   }
 }

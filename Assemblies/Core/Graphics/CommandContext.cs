@@ -1,8 +1,8 @@
 ﻿namespace Core.Graphics
 {
+  using SharpDX;
   using SharpDX.Direct3D12;
   using System;
-  using System.Collections.Generic;
   using System.Diagnostics;
   using System.Runtime.InteropServices;
 
@@ -27,7 +27,7 @@
     internal int Int;
 
     /// <summary>
-    /// Defines the Uint
+    /// Defines the int
     /// </summary>
     [FieldOffset(0)]
     internal uint Uint;
@@ -42,7 +42,7 @@
   /// <summary>
   /// Defines the <see cref="CommandContext" />
   /// </summary>
-  public class CommandContext
+  public class CommandContext : IDisposable
   {
     #region Constructors
 
@@ -50,135 +50,236 @@
     /// Initializes a new instance of the <see cref="CommandContext"/> class.
     /// </summary>
     /// <param name="type">The <see cref="CommandListType"/></param>
-    public CommandContext(CommandListType type)
+    private CommandContext(CommandListType type)
     {
-      Type = type;
+      _Type = type;
+      _DynamicViewDescriptorHeap = new DynamicDescriptorHeap(this, DescriptorHeapType.ConstantBufferViewShaderResourceViewUnorderedAccessView);
+      _DynamicSamplerDescriptorHeap = new DynamicDescriptorHeap(this, DescriptorHeapType.Sampler);
+      _CpuLinearAllocator = new LinearAllocator(ELinearAllocatorType.CpuWritable);
+      _GpuLinearAllocator = new LinearAllocator(ELinearAllocatorType.GpuExclusive);
+    }
+
+    private void Reset()
+    {
+      Debug.Assert(_CommandList != null && _CurrentAllocator == null);
+      _CurrentAllocator = Globals.CommandManager.Queue(_Type).RequestAllocator();
+      _CommandList.Reset(_CurrentAllocator, null);
+
+      _CurrentGraphicsRootSignature = null;
+      _CurrentGraphicsPipelineState = null;
+      _CurrentComputeRootSignature = null;
+      _CurrentComputePipelineState = null;
+      _NumBarrierToFlush = 0;
+
+      BindDescriptorHeaps();
+    }
+
+    public static void DestroyAllContexts()
+    {
+      LinearAllocator.DestroyAll();
+      DynamicDescriptorHeap.DestroyAll();
+      Globals.ContextManager.DestroyAllContexts();
+    }
+
+    public static CommandContext Begin(string id = "")
+    {
+      var newContext = Globals.ContextManager.AllocateContext(CommandListType.Direct);
+      newContext.ID = id;
+
+      //TODO EngineProfiling
+      return newContext;
+    }
+
+    // Flush existing commands to the GPU but keep the context alive
+    public long Flush(bool waitForCompletion = false)
+    {
+      FlushResourceBarriers();
+      Debug.Assert(_CurrentAllocator != null);
+      var fenceValue = Globals.CommandManager.Queue(_Type).ExecuteCommandList(_CommandList);
+
+      if (waitForCompletion) { CommandListManager.WaitForFence(fenceValue); }
+
+      // Reset the command list and restore previous state
+
+      _CommandList.Reset(_CurrentAllocator, null);
+
+      if(_CurrentGraphicsRootSignature != null)
+      {
+        _CommandList.SetGraphicsRootSignature(_CurrentGraphicsRootSignature);
+        _CommandList.PipelineState = _CurrentGraphicsPipelineState;
+      }
+
+      if (_CurrentComputeRootSignature != null)
+      {
+        _CommandList.SetComputeRootSignature(_CurrentComputeRootSignature);
+        _CommandList.PipelineState = _CurrentComputePipelineState;
+      }
+
+      BindDescriptorHeaps();
+
+      return fenceValue;
+    }
+
+    // Flush existing commands and release the current context
+    public long Finish(bool waitForCompletion = false)
+    {
+      Debug.Assert(_Type == CommandListType.Direct || _Type == CommandListType.Compute);
+
+      FlushResourceBarriers();
+
+      //TODO : EngineProfiling
+
+      Debug.Assert(_CurrentAllocator != null);
+
+      var queue = Globals.CommandManager.Queue(_Type);
+      var fenceValue = queue.ExecuteCommandList(_CommandList);
+      queue.DiscardAllocator(fenceValue, _CurrentAllocator);
+      _CurrentAllocator = null;
+
+      _CpuLinearAllocator.CleanUpPages(fenceValue);
+      _GpuLinearAllocator.CleanUpPages(fenceValue);
+      _DynamicViewDescriptorHeap.CleanupUsedHeaps(fenceValue);
+      _DynamicSamplerDescriptorHeap.CleanupUsedHeaps(fenceValue);
+
+      if (waitForCompletion) { CommandListManager.WaitForFence(fenceValue); }
+
+      Globals.ContextManager.FreeContext(this);
+
+      return fenceValue;
+    }
+
+    public void Initialize()
+    {
+      Globals.CommandManager.CreateNewCommandList(_Type, out _CommandList, out _CurrentAllocator);
+    }
+
+    public GraphicsContext GraphicsContext {
+      get {
+        Debug.Assert(_Type != CommandListType.Compute, "Cannot convert async compute context to graphics");
+        return this as GraphicsContext;
+      }
+    }
+
+    public ComputeContext ComputeContext => this as ComputeContext;
+
+    public CommandList CommandList => _CommandList;
+
+    public void CopyBuffer(GPUResource dest, GPUResource src)
+    {
+      TransitionResource(dest, ResourceStates.CopyDestination);
+      TransitionResource(src, ResourceStates.CopySource);
+      FlushResourceBarriers();
+      _CommandList.CopyResource(dest.Resource, src.Resource);
+    }
+    public void CopyBufferRegion(GPUResource dest, long destOffset, GPUResource src, long srcOffset, long numBytes)
+    {
+      TransitionResource(dest, ResourceStates.CopyDestination);
+      //TransitionResource(src, ResourceStates.CopySource);
+      FlushResourceBarriers();
+      _CommandList.CopyBufferRegion(dest.Resource, destOffset, src.Resource, srcOffset, numBytes);
+    }
+    public void CopySubresource(GPUResource dest, int destSubIndex, GPUResource src, int srcSubIndex)
+    {
+      FlushResourceBarriers();
+      var destLocation = new TextureCopyLocation(dest.Resource, destSubIndex);
+      var srcLocation = new TextureCopyLocation(src.Resource, srcSubIndex);
+
+      _CommandList.CopyTextureRegion(destLocation, 0, 0, 0, srcLocation, null);
+    }
+    public void CopyCounter(GPUResource dest, long destOffset, StructuredBuffer src)
+    {
+      TransitionResource(dest, ResourceStates.CopyDestination);
+      TransitionResource(src, ResourceStates.CopySource);
+      FlushResourceBarriers();
+      _CommandList.CopyBufferRegion(dest.Resource, destOffset, src.CounterBuffer.Resource, 0, 4);
+    }
+    public void ResetCounter(StructuredBuffer buf, long value = 0)
+    {
+      FillBuffer(buf.CounterBuffer, 0, value, sizeof(UInt32));
+      TransitionResource(buf.CounterBuffer, ResourceStates.UnorderedAccess);
+    }
+
+    public DynAlloc ReserveUploadMemory(long sizeInBytes) => _CpuLinearAllocator.Allocate(sizeInBytes);
+    public static void InitializeTexture(GPUResource dest, int numSubresources, byte[] subData )
+    {
+      var uploadBufferSize = DirectX12.GetRequiredIntermediateSize(dest.Resource, 0, numSubresources);
+
+      var initContext = Begin();
+
+      DynAlloc mem = initContext.ReserveUploadMemory(uploadBufferSize);
+    }
+    public static void InitializeBuffer(GPUResource dest, byte[] data, long numBytes, long offset = 0) { }
+    public static void InitializeTextureArraySlice(GPUResource dest, int sliceIndex, GPUResource src) { }
+    public static void ReadbackTexture2D(GPUResource readbackBuffer, PixelBuffer srcBuffer) { }
+
+    public void WriteBuffer(GPUResource dest, long destOffset, byte[] data, long numBytes ) { }
+    public void FillBuffer(GPUResource dest, long destOffset, DWParam value, long numBytes) { }
+
+    public void TransitionResource(GPUResource resource, ResourceStates newState, bool flushImmediate = false) { }
+    public void BeginResourceTransition(GPUResource resource, ResourceStates newState, bool flushImmediate = false) { }
+    public void InsertUAVBarrier(GPUResource resource, bool FlushImmediate = false) { }
+    public void InsertAliasBarrier(GPUResource before, GPUResource after, bool flushImmediate = false) { }
+    public void FlushResourceBarriers() { }
+
+    public void InsertTimeStamp(QueryHeap queryHeap, int queryIdx) { }
+    public void ResolveTimeStamps(Resource readbackHeap, QueryHeap queryHeap, int numQueries) { }
+    public void PIXBeginEvent(string label) { }
+    public void PIXEndEvent() { }
+    public void PIXSetMarker(string label) { }
+
+    public void SetDescriptorHeap(DescriptorHeapType type, DescriptorHeap heapPtr) { }
+    public void SetDescriptorHeaps(int heapCount, DescriptorHeapType[], DescriptorHeap heapPtrs[] ) { }
+
+    public void SetPredication(Resource buffer, long bufferOffset, PredicationOperation op) { }
+
+    protected void BindDescriptorHeaps()
+    {
+      var nonNullHeaps = 0;
+      var heapsToBind = new DescriptorHeap[(int)DescriptorHeapType.NumTypes];
+
+      for(int idx = 0; idx < (int)DescriptorHeapType.NumTypes; idx++)
+      {
+        var heap = _CurrentDescriptorHeap[idx];
+        if(heap != null) { heapsToBind[nonNullHeaps++] = heap; }
+      }
+
+      if(nonNullHeaps > 0) { _CommandList.SetDescriptorHeaps(heapsToBind); }
     }
 
     #endregion
 
     #region Properties
 
-    /// <summary>
-    /// Gets or sets the Type
-    /// </summary>
-    public CommandListType Type { get; internal set; }
+    protected CommandListManager _OwningManager;
+    protected GraphicsCommandList _CommandList;
+    protected CommandAllocator _CurrentAllocator;
+
+    protected RootSignature _CurrentGraphicsRootSignature;
+    protected PipelineState _CurrentGraphicsPipelineState;
+    protected RootSignature _CurrentComputeRootSignature;
+    protected PipelineState _CurrentComputePipelineState;
+
+    protected DynamicDescriptorHeap _DynamicViewDescriptorHeap;
+    protected DynamicDescriptorHeap _DynamicSamplerDescriptorHeap;
+
+    protected ResourceBarrier[] _ResourceBarrierBuffer = new ResourceBarrier[16];
+    protected int _NumBarrierToFlush;
+
+    protected DescriptorHeap[] _CurrentDescriptorHeap = new DescriptorHeap[(int)DescriptorHeapType.NumTypes];
+
+    protected LinearAllocator _CpuLinearAllocator;
+    protected LinearAllocator _GpuLinearAllocator;
+
+    protected string ID { get; set; }
+    protected CommandListType _Type;
 
     #endregion
 
     #region Methods
-
-    /// <summary>
-    /// The Initialize
-    /// </summary>
-    internal void Initialize()
+    
+    public void Dispose()
     {
-      throw new NotImplementedException();
-    }
-
-    /// <summary>
-    /// The Reset
-    /// </summary>
-    internal void Reset()
-    {
-      throw new NotImplementedException();
-    }
-
-    #endregion
-  }
-
-  /// <summary>
-  /// Defines the <see cref="ContextManager" />
-  /// </summary>
-  public class ContextManager
-  {
-    #region Fields
-
-    /// <summary>
-    /// Defines the _AvailableContexts
-    /// </summary>
-    private List<Queue<CommandContext>> _AvailableContexts = new List<Queue<CommandContext>>(4);
-
-    /// <summary>
-    /// Defines the _ContextAllocationMutex
-    /// </summary>
-    private object _ContextAllocationMutex = new object();
-
-    /// <summary>
-    /// Defines the _ContextPool
-    /// </summary>
-    private List<List<CommandContext>> _ContextPool = new List<List<CommandContext>>(4);
-
-    #endregion
-
-    #region Constructors
-
-    /// <summary>
-    /// Initializes a new instance of the <see cref="ContextManager"/> class.
-    /// </summary>
-    public ContextManager()
-    {
-      for (int idx = 0; idx < 4; idx++)
-      {
-        _ContextPool[idx] = new List<CommandContext>();
-        _AvailableContexts[idx] = new Queue<CommandContext>();
-      }
-    }
-
-    #endregion
-
-    #region Methods
-
-    /// <summary>
-    /// The AllocateContext
-    /// </summary>
-    /// <param name="type">The <see cref="CommandListType"/></param>
-    /// <returns>The <see cref="CommandContext"/></returns>
-    public CommandContext AllocateContext(CommandListType type)
-    {
-      lock (_ContextAllocationMutex)
-      {
-        var availableContexts = _AvailableContexts[(int)type];
-        CommandContext ret = null;
-
-        if (availableContexts.Count == 0)
-        {
-          ret = new CommandContext(type);
-          _ContextPool[(int)type].Add(ret);
-          ret.Initialize();
-        }
-        else
-        {
-          ret = availableContexts.Peek();
-          availableContexts.Dequeue();
-          ret.Reset();
-        }
-
-        Debug.Assert(ret != null);
-        Debug.Assert(ret.Type == type);
-
-        return ret;
-      }
-    }
-
-    /// <summary>
-    /// The DestroyAllContexts
-    /// </summary>
-    public void DestroyAllContexts()
-    {
-    }
-
-    /// <summary>
-    /// The FreeContext
-    /// </summary>
-    /// <param name="context">The <see cref="CommandContext"/></param>
-    public void FreeContext(CommandContext context)
-    {
-      Debug.Assert(context != null);
-      lock (_ContextAllocationMutex)
-      {
-        _AvailableContexts[(int)context.Type].Enqueue(context);
-      }
+      //TODO implement
     }
 
     #endregion

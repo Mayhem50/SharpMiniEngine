@@ -66,7 +66,7 @@
           NodeMask = 1
         };
 
-        var heap = GraphicsCore.Device.CreateDescriptorHeap(desc);
+        var heap = Globals.Device.CreateDescriptorHeap(desc);
         Debug.Assert(heap != null);
         _DescriptorHeapPool.Add(heap);
         return heap;
@@ -97,7 +97,7 @@
 
         if (_DescriptorSize == 0)
         {
-          _DescriptorSize = GraphicsCore.Device.GetDescriptorHandleIncrementSize(_Type);
+          _DescriptorSize = Globals.Device.GetDescriptorHandleIncrementSize(_Type);
         }
       }
 
@@ -276,9 +276,9 @@
     /// <param name="debugHeapName">The <see cref="string"/></param>
     public void Create(string debugHeapName)
     {
-      _Heap = GraphicsCore.Device.CreateDescriptorHeap(_HeapDesc);
+      _Heap = Globals.Device.CreateDescriptorHeap(_HeapDesc);
       _Heap.Name = debugHeapName;
-      _DescriptorSize = GraphicsCore.Device.GetDescriptorHandleIncrementSize(_HeapDesc.Type);
+      _DescriptorSize = Globals.Device.GetDescriptorHandleIncrementSize(_HeapDesc.Type);
       _NumFreeDescriptors = _HeapDesc.DescriptorCount;
       _FirstHandle = new DescriptorHandle(_Heap.CPUDescriptorHandleForHeapStart, _Heap.GPUDescriptorHandleForHeapStart);
       _NextHandle = _FirstHandle;

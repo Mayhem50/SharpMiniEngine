@@ -189,7 +189,7 @@
     /// <param name="fenceValue">The <see cref="long"/></param>
     public void StallForFence(long fenceValue)
     {
-      var producer = GraphicsCore.CommandManager.Queue((CommandListType)(fenceValue >> 56));
+      var producer = Globals.CommandManager.Queue((CommandListType)(fenceValue >> 56));
       _CommandQueue.Wait(producer._Fence, fenceValue);
     }
 
@@ -338,7 +338,7 @@
     /// <param name="fenceValue">The <see cref="long"/></param>
     public static void WaitForFence(long fenceValue)
     {
-      var producer = GraphicsCore.CommandManager.Queue((CommandListType)(fenceValue >> 56));
+      var producer = Globals.CommandManager.Queue((CommandListType)(fenceValue >> 56));
       producer.WaitForFence(fenceValue);
     }
 
@@ -362,7 +362,7 @@
     /// <param name="type">The <see cref="CommandListType"/></param>
     /// <param name="list">The <see cref="GraphicsCommandList"/></param>
     /// <param name="allocator">The <see cref="CommandAllocator"/></param>
-    public void CreateCommandList(CommandListType type, out GraphicsCommandList list, out CommandAllocator allocator)
+    public void CreateNewCommandList(CommandListType type, out GraphicsCommandList list, out CommandAllocator allocator)
     {
       Debug.Assert(type != CommandListType.Bundle, "Bundles are not yet supported");
 
