@@ -15,6 +15,22 @@
     public Resource Resource => _Resource;
 
     /// <summary>
+    /// Defines the _UsageState
+    /// </summary>
+    public ResourceStates UsageState {
+      get => _UsageState;
+      set => _UsageState = value;
+    }
+
+    /// <summary>
+    /// Defines the _TransitionState
+    /// </summary>
+    public ResourceStates TransitionState {
+      get => _TransitionState;
+      set => _TransitionState = value;
+    }
+
+    /// <summary>
     /// Gets the GPUVirtualAddress
     /// </summary>
     public long GPUVirtualAddress => _GPUVirtualAddress;

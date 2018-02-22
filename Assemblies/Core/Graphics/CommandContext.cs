@@ -4,6 +4,7 @@
   using SharpDX.Direct3D12;
   using System;
   using System.Diagnostics;
+  using System.Linq;
   using System.Runtime.InteropServices;
 
   /// <summary>
@@ -18,19 +19,19 @@
     /// Defines the Float
     /// </summary>
     [FieldOffset(0)]
-    internal float Float;
+    public float Float;
 
     /// <summary>
     /// Defines the Int
     /// </summary>
     [FieldOffset(0)]
-    internal int Int;
+    public int Int;
 
     /// <summary>
     /// Defines the int
     /// </summary>
     [FieldOffset(0)]
-    internal uint Uint;
+    public uint Uint;
 
     #endregion
 
@@ -200,22 +201,112 @@
     }
 
     public DynAlloc ReserveUploadMemory(long sizeInBytes) => _CpuLinearAllocator.Allocate(sizeInBytes);
-    public static void InitializeTexture(GPUResource dest, int numSubresources, byte[] subData )
+    public static void InitializeTexture(GPUResource dest, int numSubresources, SubResourceInformation[] subData )
     {
       var uploadBufferSize = DirectX12.GetRequiredIntermediateSize(dest.Resource, 0, numSubresources);
 
       var initContext = Begin();
 
-      DynAlloc mem = initContext.ReserveUploadMemory(uploadBufferSize);
+      var mem = initContext.ReserveUploadMemory(uploadBufferSize);
+      DirectX12.UpdateSubResources(initContext._CommandList, dest.Resource, mem.Buffer.Resource, 0, 0, numSubresources, subData);
+      initContext.Finish(true);
     }
-    public static void InitializeBuffer(GPUResource dest, byte[] data, long numBytes, long offset = 0) { }
-    public static void InitializeTextureArraySlice(GPUResource dest, int sliceIndex, GPUResource src) { }
-    public static void ReadbackTexture2D(GPUResource readbackBuffer, PixelBuffer srcBuffer) { }
+    public static void InitializeBuffer(GPUResource dest, byte[] data, long numBytes, long offset = 0) {
+      var initialContext = Begin();
 
-    public void WriteBuffer(GPUResource dest, long destOffset, byte[] data, long numBytes ) { }
-    public void FillBuffer(GPUResource dest, long destOffset, DWParam value, long numBytes) { }
+      var mem = initialContext.ReserveUploadMemory(numBytes);
+      var ptr = mem.Buffer.Resource.Map(0, null);
+      Utilities.Write(ptr, data, 0, data.Length);
+      mem.Buffer.Resource.Unmap(0);
 
-    public void TransitionResource(GPUResource resource, ResourceStates newState, bool flushImmediate = false) { }
+      initialContext.TransitionResource(dest, ResourceStates.CopyDestination, true);
+      initialContext._CommandList.CopyBufferRegion(dest.Resource, offset, mem.Buffer.Resource, 0, numBytes);
+      initialContext.TransitionResource(dest, ResourceStates.GenericRead, true);
+      initialContext.Finish(true);
+    }
+    public static void InitializeTextureArraySlice(GPUResource dest, int sliceIndex, GPUResource src) {
+      var context = Begin();
+
+      context.TransitionResource(dest, ResourceStates.CopyDestination);
+      context.FlushResourceBarriers();
+
+      var destDesc = dest.Resource.Description;
+      var srcDesc = src.Resource.Description;
+
+      Debug.Assert(sliceIndex < destDesc.DepthOrArraySize &&
+        srcDesc.DepthOrArraySize == 1 &&
+        destDesc.Width == srcDesc.Width &&
+        destDesc.Height == srcDesc.Height &&
+        destDesc.MipLevels <= srcDesc.MipLevels);
+
+      int subresourceIndex = sliceIndex * destDesc.MipLevels;
+
+      for(int idx = 0; idx < destDesc.MipLevels; idx++)
+      {
+        var destCopyLocation = new TextureCopyLocation(dest.Resource, subresourceIndex + idx);
+        var srcCopyLocation = new TextureCopyLocation(src.Resource, idx);
+
+        context._CommandList.CopyTextureRegion(destCopyLocation, 0, 0, 0, srcCopyLocation, null);
+      }
+
+      context.TransitionResource(dest, ResourceStates.GenericRead);
+      context.Finish(true);
+    }
+    public static void ReadbackTexture2D(GPUResource readbackBuffer, PixelBuffer srcBuffer) {
+      var desc = readbackBuffer.Resource.Description;
+      var footprints = new PlacedSubResourceFootprint[1];
+      Globals.Device.GetCopyableFootprints(ref desc, 0, 1, 0, footprints, new int[1], new long[1], out var totalBytes);
+
+      var context = Begin("Copy texture to memory");
+      context.TransitionResource(srcBuffer, ResourceStates.CopySource, true);
+      context._CommandList.CopyTextureRegion(new TextureCopyLocation(readbackBuffer.Resource, footprints[0]), 0, 0, 0, new TextureCopyLocation(srcBuffer.Resource, 0), null);
+      context.Finish(true);
+    }
+
+    public void WriteBuffer(GPUResource dest, long destOffset, byte[] data, long numBytes ) {
+      Debug.Assert(data != null && MathUtils.IsAligned(data, 16));
+      var tempSpace = _CpuLinearAllocator.Allocate(numBytes, 512);
+      Utilities.Write(tempSpace.DataPtr, data, 0, data.Length);
+      CopyBufferRegion(dest, destOffset, tempSpace.Buffer, tempSpace.Offset, numBytes);
+    }
+    public void FillBuffer(GPUResource dest, long destOffset, DWParam value, long numBytes) {
+      var tempSpace = _CpuLinearAllocator.Allocate(numBytes, 512);
+
+      var tmp = Enumerable.Repeat(value.Float, (int)numBytes / sizeof(float)).ToArray();
+
+      Utilities.Write(tempSpace.DataPtr, tmp, 0, tmp.Length);
+      CopyBufferRegion(dest, destOffset, tempSpace.Buffer, tempSpace.Offset, numBytes);
+    }
+
+    public void TransitionResource(GPUResource resource, ResourceStates newState, bool flushImmediate = false) {
+      var oldState = resource.UsageState;
+
+      if(_Type == CommandListType.Compute)
+      {
+        Debug.Assert((oldState & (ResourceStates)Constants.VALID_COMPUTE_QUEUE_RESOURCE_STATES) == oldState);
+        Debug.Assert((newState & (ResourceStates)Constants.VALID_COMPUTE_QUEUE_RESOURCE_STATES) == newState);
+
+        if(oldState != newState)
+        {
+          Debug.Assert(_NumBarrierToFlush < 16, "Exceeded arbitrary limit on buffered barriers");
+          ref var barrierDesc = ref _ResourceBarrierBuffer[_NumBarrierToFlush++];
+          barrierDesc.Type = ResourceBarrierType.Transition;
+          barrierDesc.Transition = new ResourceTransitionBarrier(resource.Resource, oldState, newState) { Subresource = Constants.D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES };
+
+          if(newState == resource.TransitionState)
+          {
+            barrierDesc.Flags = ResourceBarrierFlags.EndOnly;
+            resource.TransitionState = (ResourceStates)(- 1);
+          }
+          else { barrierDesc.Flags = ResourceBarrierFlags.None; }
+
+          resource.UsageState = newState;
+        }
+        else if(newState == ResourceStates.UnorderedAccess) { InsertUAVBarrier(resource, flushImmediate); }
+
+        if(flushImmediate || _NumBarrierToFlush == 16) { FlushResourceBarriers(); }
+      }
+    }
     public void BeginResourceTransition(GPUResource resource, ResourceStates newState, bool flushImmediate = false) { }
     public void InsertUAVBarrier(GPUResource resource, bool FlushImmediate = false) { }
     public void InsertAliasBarrier(GPUResource before, GPUResource after, bool flushImmediate = false) { }
